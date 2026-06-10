@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Fish Health Monitoring System — Pipeline Architecture</title>
+  <meta name="description" content="AI Fish Health Monitoring: Camera Images → Roboflow Model → Python Inference → CSV Logs → Power BI Dashboard. Two classes: Healthy & Diseased." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #060b10;
+      --surface:  #0b1520;
+      --border:   rgba(255,255,255,0.07);
+      --text:     #e8eef6;
+      --muted:    #7a8fa8;
+
+      /* pipeline stage colours */
+      --cam-h:    #38bdf8;
+      --rf-h:     #a78bfa;
+      --py-h:     #22d3ee;
+      --csv-h:    #34d399;
+      --pbi-h:    #fbbf24;
+
+      /* class colours */
+      --healthy:  #22c55e;
+      --diseased: #ef4444;
+    }
+
+    html, body {
+      min-height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      overflow-x: hidden;
+    }
+
+    /* ── Deep-sea background gradient ── */
+    body {
+      background:
+        radial-gradient(ellipse 80% 60% at 50% -10%, rgba(14,56,100,.55) 0%, transparent 70%),
+        var(--bg);
+    }
+
+    /* ── Grid ── */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(56,189,248,.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(56,189,248,.03) 1px, transparent 1px);
+      background-size: 56px 56px;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* floating bubble particles */
+    @keyframes float-up {
+      0%   { transform: translateY(0) scale(1);   opacity: .35; }
+      100% { transform: translateY(-100vh) scale(1.4); opacity: 0; }
+    }
+    .bubble {
+      position: fixed;
+      border-radius: 50%;
+      background: rgba(56,189,248,.18);
+      animation: float-up linear infinite;
+      z-index: 0;
+      pointer-events: none;
+    }
+
+    /* ── Page layout ── */
+    .page {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 60px 24px 90px;
+    }
+
+    /* ── Header ── */
+    header { text-align: center; margin-bottom: 60px; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(56,189,248,.08);
+      border: 1px solid rgba(56,189,248,.2);
+      border-radius: 100px;
+      padding: 6px 18px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      color: var(--cam-h);
+      margin-bottom: 22px;
+    }
+    .badge-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--cam-h);
+      animation: pulse-dot 2s ease-in-out infinite;
+    }
+    @keyframes pulse-dot {
+      0%,100% { opacity: 1; box-shadow: 0 0 0 0 rgba(56,189,248,.5); }
+      50%      { opacity: .5; box-shadow: 0 0 0 5px rgba(56,189,248,0); }
+    }
+
+    header h1 {
+      font-size: clamp(1.9rem, 5vw, 3.1rem);
+      font-weight: 800;
+      letter-spacing: -.035em;
+      line-height: 1.1;
+      background: linear-gradient(130deg, #fff 20%, var(--cam-h) 80%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 14px;
+    }
+    header p {
+      color: var(--muted);
+      font-size: .95rem;
+      max-width: 520px;
+      line-height: 1.6;
+    }
+
+    /* ── Pipeline column ── */
+    .pipeline {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      width: 100%;
+      max-width: 700px;
+    }
+
+    /* ── NODE ── */
+    .node {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 22px;
+      padding: 26px 30px 22px;
+      position: relative;
+      cursor: default;
+      transition: transform .35s cubic-bezier(.34,1.56,.64,1),
+                  box-shadow .3s ease,
+                  border-color .3s ease;
+      overflow: hidden;
+    }
+    /* shimmer overlay */
+    .node::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 22px;
+      background: var(--glow);
+      opacity: 0;
+      transition: opacity .35s ease;
+    }
+    .node:hover { transform: translateY(-5px) scale(1.012); }
+    .node:hover::before { opacity: 1; }
+
+    /* per-stage glow + shadow + border */
+    .node--cam { --glow: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(56,189,248,.13) 0%, transparent 70%); }
+    .node--rf  { --glow: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(167,139,250,.13) 0%, transparent 70%); }
+    .node--py  { --glow: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(34,211,238,.13) 0%, transparent 70%); }
+    .node--csv { --glow: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(52,211,153,.13) 0%, transparent 70%); }
+    .node--pbi { --glow: radial-gradient(ellipse 70% 50% at 50% 0%, rgba(251,191,36,.13) 0%, transparent 70%); }
+
+    .node:hover.node--cam { box-shadow: 0 0 0 1px rgba(56,189,248,.4),  0 24px 64px rgba(56,189,248,.15);  border-color: rgba(56,189,248,.25); }
+    .node:hover.node--rf  { box-shadow: 0 0 0 1px rgba(167,139,250,.4), 0 24px 64px rgba(167,139,250,.15); border-color: rgba(167,139,250,.25); }
+    .node:hover.node--py  { box-shadow: 0 0 0 1px rgba(34,211,238,.4),  0 24px 64px rgba(34,211,238,.15);  border-color: rgba(34,211,238,.25); }
+    .node:hover.node--csv { box-shadow: 0 0 0 1px rgba(52,211,153,.4),  0 24px 64px rgba(52,211,153,.15);  border-color: rgba(52,211,153,.25); }
+    .node:hover.node--pbi { box-shadow: 0 0 0 1px rgba(251,191,36,.4),  0 24px 64px rgba(251,191,36,.15);  border-color: rgba(251,191,36,.25); }
+
+    /* top accent line */
+    .node-bar {
+      position: absolute;
+      top: 0; left: 20px; right: 20px;
+      height: 3px;
+      border-radius: 0 0 6px 6px;
+      background: var(--accent-bar);
+    }
+    .node--cam { --accent-bar: linear-gradient(90deg, var(--cam-h), #7dd3fc); }
+    .node--rf  { --accent-bar: linear-gradient(90deg, var(--rf-h),  #c4b5fd); }
+    .node--py  { --accent-bar: linear-gradient(90deg, var(--py-h),  #a5f3fc); }
+    .node--csv { --accent-bar: linear-gradient(90deg, var(--csv-h), #6ee7b7); }
+    .node--pbi { --accent-bar: linear-gradient(90deg, var(--pbi-h), #fde68a); }
+
+    /* inner row */
+    .node-inner {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+    }
+
+    /* icon box */
+    .node-icon {
+      flex-shrink: 0;
+      width: 58px; height: 58px;
+      border-radius: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      background: var(--icon-bg);
+      border: 1px solid var(--icon-border);
+      position: relative;
+      z-index: 1;
+    }
+    .node--cam { --icon-bg: rgba(56,189,248,.13);  --icon-border: rgba(56,189,248,.28); }
+    .node--rf  { --icon-bg: rgba(167,139,250,.13); --icon-border: rgba(167,139,250,.28); }
+    .node--py  { --icon-bg: rgba(34,211,238,.13);  --icon-border: rgba(34,211,238,.28); }
+    .node--csv { --icon-bg: rgba(52,211,153,.13);  --icon-border: rgba(52,211,153,.28); }
+    .node--pbi { --icon-bg: rgba(251,191,36,.13);  --icon-border: rgba(251,191,36,.28); }
+
+    .node-text { flex: 1; }
+
+    .node-step {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: var(--step-color);
+      margin-bottom: 3px;
+    }
+    .node--cam { --step-color: var(--cam-h); }
+    .node--rf  { --step-color: var(--rf-h); }
+    .node--py  { --step-color: var(--py-h); }
+    .node--csv { --step-color: var(--csv-h); }
+    .node--pbi { --step-color: var(--pbi-h); }
+
+    .node-title {
+      font-size: 1.12rem;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 5px;
+    }
+    .node-desc {
+      font-size: .82rem;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    /* tags */
+    .node-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 13px;
+      position: relative;
+      z-index: 1;
+    }
+    .tag {
+      background: rgba(255,255,255,.045);
+      border: 1px solid rgba(255,255,255,.07);
+      border-radius: 6px;
+      padding: 3px 9px;
+      font-size: .68rem;
+      font-weight: 500;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      transition: background .2s, color .2s, border-color .2s;
+    }
+    .node:hover .tag {
+      background: rgba(255,255,255,.08);
+      color: var(--text);
+      border-color: rgba(255,255,255,.12);
+    }
+
+    /* step number */
+    .step-badge {
+      position: absolute;
+      top: 14px; right: 18px;
+      font-size: .68rem;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      color: rgba(255,255,255,.2);
+      letter-spacing: .06em;
+    }
+
+    /* ── ARROW ── */
+    .arrow {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 62px;
+      position: relative;
+    }
+    .arrow-line {
+      width: 2px;
+      flex: 1;
+      background: linear-gradient(to bottom, var(--a-from), var(--a-to));
+      position: relative;
+      overflow: hidden;
+    }
+    .arrow-line::after {
+      content: '';
+      position: absolute;
+      width: 2px;
+      height: 28%;
+      background: rgba(255,255,255,.75);
+      animation: flow-down 1.9s linear infinite;
+    }
+    @keyframes flow-down {
+      0%   { top: -28%; opacity: 0; }
+      15%  { opacity: 1; }
+      85%  { opacity: 1; }
+      100% { top: 100%;  opacity: 0; }
+    }
+    .arrow-tip {
+      width: 0; height: 0;
+      border-left: 7px solid transparent;
+      border-right: 7px solid transparent;
+      border-top: 10px solid var(--a-to);
+    }
+    .arrow-label {
+      position: absolute;
+      left: calc(50% + 14px);
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: .66rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      white-space: nowrap;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 2px 8px;
+    }
+
+    .arrow--1 { --a-from: var(--cam-h); --a-to: var(--rf-h); }
+    .arrow--2 { --a-from: var(--rf-h);  --a-to: var(--py-h); }
+    .arrow--3 { --a-from: var(--py-h);  --a-to: var(--csv-h); }
+    .arrow--4 { --a-from: var(--csv-h); --a-to: var(--pbi-h); }
+
+    /* ── Detection Classes section ── */
+    .classes-section {
+      margin-top: 64px;
+      width: 100%;
+      max-width: 700px;
+      animation: fadeSlideIn .6s cubic-bezier(.16,1,.3,1) both;
+      animation-delay: .7s;
+    }
+    .classes-header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+    .classes-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--cam-h);
+      margin-bottom: 8px;
+    }
+    .classes-title {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .classes-subtitle {
+      font-size: .82rem;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    .classes-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+
+    /* individual class card */
+    .class-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 28px 24px;
+      position: relative;
+      overflow: hidden;
+      cursor: default;
+      transition: transform .35s cubic-bezier(.34,1.56,.64,1),
+                  box-shadow .3s ease,
+                  border-color .3s ease;
+    }
+    .class-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 18px;
+      background: var(--card-glow);
+      opacity: 0;
+      transition: opacity .35s ease;
+    }
+    .class-card:hover { transform: translateY(-5px) scale(1.02); }
+    .class-card:hover::before { opacity: 1; }
+
+    .class-card--healthy {
+      --card-glow: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(34,197,94,.15) 0%, transparent 70%);
+    }
+    .class-card--diseased {
+      --card-glow: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(239,68,68,.15) 0%, transparent 70%);
+    }
+    .class-card:hover.class-card--healthy {
+      box-shadow: 0 0 0 1px rgba(34,197,94,.4), 0 20px 60px rgba(34,197,94,.18);
+      border-color: rgba(34,197,94,.3);
+    }
+    .class-card:hover.class-card--diseased {
+      box-shadow: 0 0 0 1px rgba(239,68,68,.4), 0 20px 60px rgba(239,68,68,.18);
+      border-color: rgba(239,68,68,.3);
+    }
+
+    .class-bar {
+      position: absolute;
+      top: 0; left: 16px; right: 16px;
+      height: 3px;
+      border-radius: 0 0 4px 4px;
+    }
+    .class-card--healthy .class-bar { background: linear-gradient(90deg, #22c55e, #86efac); }
+    .class-card--diseased .class-bar { background: linear-gradient(90deg, #ef4444, #fca5a5); }
+
+    .class-dot-row {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+    .class-dot {
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      position: relative;
+    }
+    .class-dot::after {
+      content: '';
+      position: absolute;
+      inset: -4px;
+      border-radius: 50%;
+      background: var(--dot-glow);
+      animation: ring-pulse 2.5s ease-in-out infinite;
+    }
+    .class-card--healthy .class-dot { background: #22c55e; --dot-glow: rgba(34,197,94,.35); }
+    .class-card--diseased .class-dot { background: #ef4444; --dot-glow: rgba(239,68,68,.35); }
+
+    @keyframes ring-pulse {
+      0%, 100% { transform: scale(1);   opacity: .7; }
+      50%       { transform: scale(1.5); opacity: 0; }
+    }
+
+    .class-name {
+      font-size: 1.2rem;
+      font-weight: 800;
+      letter-spacing: -.01em;
+      color: #fff;
+    }
+
+    .class-body {
+      position: relative;
+      z-index: 1;
+    }
+    .class-desc {
+      font-size: .8rem;
+      color: var(--muted);
+      line-height: 1.6;
+      margin-bottom: 14px;
+    }
+
+    .class-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .class-tag {
+      font-size: .65rem;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+      padding: 2px 8px;
+      border-radius: 5px;
+      border: 1px solid;
+    }
+    .class-card--healthy .class-tag {
+      color: #4ade80;
+      border-color: rgba(74,222,128,.25);
+      background: rgba(74,222,128,.07);
+    }
+    .class-card--diseased .class-tag {
+      color: #f87171;
+      border-color: rgba(248,113,113,.25);
+      background: rgba(248,113,113,.07);
+    }
+
+    /* confidence bar */
+    .conf-bar-wrap {
+      margin-top: 18px;
+      position: relative;
+      z-index: 1;
+    }
+    .conf-bar-label {
+      display: flex;
+      justify-content: space-between;
+      font-size: .65rem;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+    .conf-bar-track {
+      height: 4px;
+      background: rgba(255,255,255,.06);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+    .conf-bar-fill {
+      height: 100%;
+      border-radius: 4px;
+      background: var(--bar-color);
+      transform-origin: left;
+      animation: grow-bar .9s cubic-bezier(.16,1,.3,1) both;
+      animation-delay: .9s;
+    }
+    @keyframes grow-bar {
+      from { transform: scaleX(0); }
+      to   { transform: scaleX(1); }
+    }
+    .class-card--healthy .conf-bar-fill { --bar-color: linear-gradient(90deg, #22c55e, #86efac); width: 92%; }
+    .class-card--diseased .conf-bar-fill { --bar-color: linear-gradient(90deg, #ef4444, #fca5a5); width: 88%; }
+
+    /* ── Footer ── */
+    footer {
+      margin-top: 64px;
+      text-align: center;
+      color: var(--muted);
+      font-size: .78rem;
+      line-height: 1.8;
+    }
+    footer strong { color: rgba(255,255,255,.45); }
+
+    /* ── Animations ── */
+    @keyframes fadeSlideIn {
+      from { opacity: 0; transform: translateY(30px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .pipeline > * {
+      animation: fadeSlideIn .55s cubic-bezier(.16,1,.3,1) both;
+    }
+    .pipeline > *:nth-child(1)  { animation-delay: .05s; }
+    .pipeline > *:nth-child(2)  { animation-delay: .12s; }
+    .pipeline > *:nth-child(3)  { animation-delay: .19s; }
+    .pipeline > *:nth-child(4)  { animation-delay: .26s; }
+    .pipeline > *:nth-child(5)  { animation-delay: .33s; }
+    .pipeline > *:nth-child(6)  { animation-delay: .40s; }
+    .pipeline > *:nth-child(7)  { animation-delay: .47s; }
+    .pipeline > *:nth-child(8)  { animation-delay: .54s; }
+    .pipeline > *:nth-child(9)  { animation-delay: .61s; }
+    header { animation: fadeSlideIn .6s cubic-bezier(.16,1,.3,1) both; }
+
+    /* ── Responsive ── */
+    @media (max-width: 540px) {
+      .classes-grid { grid-template-columns: 1fr; }
+      .node { padding: 18px 18px 16px; }
+      .node-icon { width: 48px; height: 48px; font-size: 22px; }
+      .node-title { font-size: 1rem; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- floating bubbles -->
+<script>
+  (function(){
+    const sizes = [4,6,5,7,4,8,5,6];
+    const delays = [0,3,7,1,5,9,2,6];
+    const durations = [14,18,12,20,16,22,15,19];
+    const lefts = [10,22,38,55,67,75,84,92];
+    sizes.forEach((_,i)=>{
+      const b = document.createElement('div');
+      b.className = 'bubble';
+      b.style.cssText = `
+        width:${sizes[i]}px;height:${sizes[i]}px;
+        left:${lefts[i]}%;bottom:-10px;
+        animation-duration:${durations[i]}s;
+        animation-delay:${delays[i]}s;
+      `;
+      document.body.appendChild(b);
+    });
+  })();
+</script>
+
+<div class="page">
+
+  <!-- ── Header ── -->
+  <header>
+    <div class="badge"><span class="badge-dot"></span> AI Fish Health Monitoring System</div>
+    <h1>System Architecture Pipeline</h1>
+    <p>End-to-end computer vision pipeline: from underwater camera frames to Power BI health dashboards, powered by Roboflow &amp; Python.</p>
+  </header>
+
+  <!-- ── Pipeline ── -->
+  <div class="pipeline">
+
+    <!-- 1 · Camera -->
+    <div class="node node--cam" id="step-camera">
+      <div class="node-bar"></div>
+      <span class="step-badge">01</span>
+      <div class="node-inner">
+        <div class="node-icon">📷</div>
+        <div class="node-text">
+          <div class="node-step">Step 1 — Input</div>
+          <div class="node-title">Camera Images</div>
+          <div class="node-desc">Raw frames captured from underwater cameras or IP cameras. Supports live video feeds and batch image folder processing at up to 1080p / 30 FPS.</div>
+        </div>
+      </div>
+      <div class="node-tags">
+        <span class="tag">OpenCV</span>
+        <span class="tag">RTSP / USB</span>
+        <span class="tag">1080p · 30 FPS</span>
+        <span class="tag">640×640 px resize</span>
+        <span class="tag">cv2.VideoCapture</span>
+      </div>
+    </div>
+
+    <div class="arrow arrow--1">
+      <div class="arrow-line"></div>
+      <div class="arrow-tip"></div>
+      <span class="arrow-label">frames / images</span>
+    </div>
+
+    <!-- 2 · Roboflow -->
+    <div class="node node--rf" id="step-roboflow">
+      <div class="node-bar"></div>
+      <span class="step-badge">02</span>
+      <div class="node-inner">
+        <div class="node-icon">🤖</div>
+        <div class="node-text">
+          <div class="node-step">Step 2 — Model</div>
+          <div class="node-title">Roboflow Model</div>
+          <div class="node-desc">Custom YOLOv8 model trained on labelled fish images. Roboflow handles annotation, augmentation, Train/Val/Test splitting, and cloud-hosted inference.</div>
+        </div>
+      </div>
+      <div class="node-tags">
+        <span class="tag">YOLOv8 / v11</span>
+        <span class="tag">Roboflow API</span>
+        <span class="tag">annotate · augment</span>
+        <span class="tag">Train / Val / Test</span>
+        <span class="tag">bbox + confidence</span>
+      </div>
+    </div>
+
+    <div class="arrow arrow--2">
+      <div class="arrow-line"></div>
+      <div class="arrow-tip"></div>
+      <span class="arrow-label">predictions JSON</span>
+    </div>
+
+    <!-- 3 · Python Inference -->
+    <div class="node node--py" id="step-python">
+      <div class="node-bar"></div>
+      <span class="step-badge">03</span>
+      <div class="node-inner">
+        <div class="node-icon">🐍</div>
+        <div class="node-text">
+          <div class="node-step">Step 3 — Processing</div>
+          <div class="node-title">Python Inference</div>
+          <div class="node-desc">Python script orchestrates real-time frame capture, calls Roboflow SDK, classifies each detection as <strong style="color:#22c55e">Healthy</strong> or <strong style="color:#ef4444">Diseased</strong>, draws bounding boxes, and writes structured log records.</div>
+        </div>
+      </div>
+      <div class="node-tags">
+        <span class="tag">roboflow SDK</span>
+        <span class="tag">inference</span>
+        <span class="tag">OpenCV · real-time</span>
+        <span class="tag">pandas</span>
+        <span class="tag">datetime</span>
+      </div>
+    </div>
+
+    <div class="arrow arrow--3">
+      <div class="arrow-line"></div>
+      <div class="arrow-tip"></div>
+      <span class="arrow-label">structured rows</span>
+    </div>
+
+    <!-- 4 · CSV Logs -->
+    <div class="node node--csv" id="step-csv">
+      <div class="node-bar"></div>
+      <span class="step-badge">04</span>
+      <div class="node-inner">
+        <div class="node-icon">📋</div>
+        <div class="node-text">
+          <div class="node-step">Step 4 — Storage</div>
+          <div class="node-title">CSV Logs</div>
+          <div class="node-desc">Each detection event is appended to a daily-rotated CSV file. Columns include timestamp, class (Healthy / Diseased), confidence score, and bounding-box coordinates.</div>
+        </div>
+      </div>
+      <div class="node-tags">
+        <span class="tag">timestamp</span>
+        <span class="tag">class_label</span>
+        <span class="tag">confidence</span>
+        <span class="tag">x · y · w · h</span>
+        <span class="tag">daily rotation</span>
+      </div>
+    </div>
+
+    <div class="arrow arrow--4">
+      <div class="arrow-line"></div>
+      <div class="arrow-tip"></div>
+      <span class="arrow-label">CSV import / refresh</span>
+    </div>
+
+    <!-- 5 · Power BI -->
+    <div class="node node--pbi" id="step-powerbi">
+      <div class="node-bar"></div>
+      <span class="step-badge">05</span>
+      <div class="node-inner">
+        <div class="node-icon">📈</div>
+        <div class="node-text">
+          <div class="node-step">Step 5 — Visualisation</div>
+          <div class="node-title">Power BI Dashboard</div>
+          <div class="node-desc">Scheduled refresh pulls the CSV logs into Power BI. Dashboards show health scores, Healthy vs. Diseased trends over time, confidence distributions, and per-camera KPIs.</div>
+        </div>
+      </div>
+      <div class="node-tags">
+        <span class="tag">Power Query</span>
+        <span class="tag">DAX measures</span>
+        <span class="tag">Health Score KPI</span>
+        <span class="tag">trend charts</span>
+        <span class="tag">scheduled refresh</span>
+      </div>
+    </div>
+
+  </div><!-- /pipeline -->
+
+  <!-- ── Detection Classes ── -->
+  <div class="classes-section">
+    <div class="classes-header">
+      <div class="classes-label">Detection Classes</div>
+      <div class="classes-title">Two-Class Classification</div>
+      <div class="classes-subtitle">The model outputs exactly one label per detected fish</div>
+    </div>
+
+    <div class="classes-grid">
+
+      <!-- Healthy -->
+      <div class="class-card class-card--healthy" id="class-healthy">
+        <div class="class-bar"></div>
+        <div class="class-dot-row">
+          <div class="class-dot"></div>
+          <div class="class-name">Healthy</div>
+        </div>
+        <div class="class-body">
+          <div class="class-desc">Fish exhibiting normal swimming behaviour, clear eyes, intact fins, and natural colouration. No visible lesions or abnormalities detected.</div>
+          <div class="class-tags">
+            <span class="class-tag">normal behaviour</span>
+            <span class="class-tag">clear eyes</span>
+            <span class="class-tag">intact fins</span>
+            <span class="class-tag">natural colour</span>
+          </div>
+          <div class="conf-bar-wrap">
+            <div class="conf-bar-label">
+              <span>avg. confidence</span>
+              <span>92%</span>
+            </div>
+            <div class="conf-bar-track">
+              <div class="conf-bar-fill"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Diseased -->
+      <div class="class-card class-card--diseased" id="class-diseased">
+        <div class="class-bar"></div>
+        <div class="class-dot-row">
+          <div class="class-dot"></div>
+          <div class="class-name">Diseased</div>
+        </div>
+        <div class="class-body">
+          <div class="class-desc">Fish displaying signs of illness: abnormal swimming, discolouration, lesions, fin rot, cloudy eyes, or erratic movement patterns.</div>
+          <div class="class-tags">
+            <span class="class-tag">lesions</span>
+            <span class="class-tag">fin rot</span>
+            <span class="class-tag">discolouration</span>
+            <span class="class-tag">cloudy eyes</span>
+          </div>
+          <div class="conf-bar-wrap">
+            <div class="conf-bar-label">
+              <span>avg. confidence</span>
+              <span>88%</span>
+            </div>
+            <div class="conf-bar-track">
+              <div class="conf-bar-fill"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── Footer ── -->
+  <footer>
+    <p><strong>AI Fish Health Monitoring System</strong> · Milestone 1 — System Architecture</p>
+    <p style="margin-top:6px">OpenCV &nbsp;·&nbsp; Roboflow &nbsp;·&nbsp; Python &nbsp;·&nbsp; Power BI</p>
+  </footer>
+
+</div>
+</body>
+</html>
